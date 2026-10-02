@@ -362,9 +362,10 @@ def build_html(days, now, today):
 <p class="muted">Alameda Unified School District &middot; updated nightly</p>
 <p class="subscribe">
   <a id="webcal" href="lincoln-lunch.ics">Subscribe in Calendar</a>
+  <a id="google" href="https://calendar.google.com/calendar/r/settings/addbyurl">Add to Google Calendar</a>
   <a href="lincoln-lunch.ics" download>Download .ics</a>
 </p>
-<p class="muted">For Google Calendar: <em>Other calendars &rarr; From URL</em> and paste <code id="feed-url">lincoln-lunch.ics</code></p>
+<p class="muted">Other calendar apps: subscribe to <code id="feed-url">lincoln-lunch.ics</code></p>
 {"".join(rows)}
 <footer>
 <p>{html.escape(FOOTER)}</p>
@@ -373,7 +374,10 @@ def build_html(days, now, today):
 <script>
   const feed = new URL("lincoln-lunch.ics", location.href);
   document.getElementById("feed-url").textContent = feed.href;
-  document.getElementById("webcal").href = feed.href.replace(/^https?:/, "webcal:");
+  const webcal = feed.href.replace(/^https?:/, "webcal:");
+  document.getElementById("webcal").href = webcal;
+  document.getElementById("google").href =
+    "https://calendar.google.com/calendar/render?cid=" + encodeURIComponent(webcal);
 </script>
 </body>
 </html>
