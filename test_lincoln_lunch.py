@@ -111,6 +111,15 @@ class IcsTest(unittest.TestCase):
         self.assertTrue(all(len(p.encode()) <= 75 for p in physical))
         self.assertEqual("".join(p[1:] if i else p for i, p in enumerate(physical)), line)
 
+    def test_fold_keeps_escapes_together(self):
+        for prefix in range(60, 80):
+            line = "DESCRIPTION:" + "x" * prefix + "\\n" * 40 + "\\\\" * 40
+            physical = L.ics_fold(line).split("\r\n")
+            for p in physical[:-1]:
+                trailing = len(p) - len(p.rstrip("\\"))
+                self.assertEqual(trailing % 2, 0, p)
+            self.assertEqual("".join(p[1:] if i else p for i, p in enumerate(physical)), line)
+
     def test_build_ics(self):
         d = L.Day(date=dt.date(2026, 10, 30), menu_id="abc",
                   dishes=[L.Dish(["Pepperoni Pizza"], "entrees"), L.Dish(["Cheese Pizza"], "entrees")])

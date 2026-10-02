@@ -273,7 +273,11 @@ def ics_escape(text):
 
 
 def ics_fold(line):
-    """Fold a content line to at most 75 octets per physical line."""
+    """Fold a content line to at most 75 octets per physical line.
+
+    Folds never split a UTF-8 sequence or a backslash escape: both are legal
+    per RFC 5545, but not every client unfolds them correctly.
+    """
     data = line.encode("utf-8")
     if len(data) <= 75:
         return line
@@ -282,6 +286,8 @@ def ics_fold(line):
         cut = min(limit, len(data))
         while cut < len(data) and (data[cut] & 0xC0) == 0x80:  # don't split UTF-8 sequences
             cut -= 1
+        if cut < len(data) and (len(data[:cut]) - len(data[:cut].rstrip(b"\\"))) % 2:
+            cut -= 1  # don't split "\n", "\,", etc.
         parts.append(data[:cut].decode("utf-8"))
         data = data[cut:]
         limit = 74  # continuation lines start with a space
@@ -327,7 +333,7 @@ def build_ics(days, now):
 
 
 def build_html(days, now, today):
-    upcoming = [d for d in days if d.date >= today][:15]
+    upcoming = [d for d in days if d.date >= today]
     rows = []
     for day in upcoming:
         dishes = "".join(f"<li>{html.escape(str(d))}</li>" for d in day.dishes)
