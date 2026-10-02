@@ -1,5 +1,8 @@
+import contextlib
 import datetime as dt
+import io
 import unittest
+import urllib.error
 
 import lincoln_lunch as L
 
@@ -70,6 +73,31 @@ class MenuDaysTest(unittest.TestCase):
     def test_summary_without_entrees(self):
         d = self.day(("Turkey Sandwich", ""), SPACER, ("Hummus Plate", None))
         self.assertEqual(d.summary, "Turkey Sandwich / Hummus Plate")
+
+
+class RetryTest(unittest.TestCase):
+    def run_with(self, codes):
+        calls = []
+
+        def fn():
+            calls.append(1)
+            if len(calls) <= len(codes):
+                raise urllib.error.HTTPError("https://x", codes[len(calls) - 1], "err", {}, None)
+            return "ok"
+
+        with contextlib.redirect_stderr(io.StringIO()):
+            return L.with_retries(fn, delay=0), len(calls)
+
+    def test_retries_cloudflare_and_server_errors(self):
+        self.assertEqual(self.run_with([403, 429, 502]), ("ok", 4))
+
+    def test_does_not_retry_client_errors(self):
+        with self.assertRaises(urllib.error.HTTPError):
+            self.run_with([404])
+
+    def test_gives_up(self):
+        with self.assertRaises(urllib.error.HTTPError):
+            self.run_with([503] * 5)
 
 
 class IcsTest(unittest.TestCase):

@@ -17,11 +17,10 @@ a JavaScript app backed by a public GraphQL API
 (`api.schoolnutritionandfitness.com/graphql`) that returns structured items:
 each has a day of the month, a product name and a category. `lincoln_lunch.py`:
 
-1. follows the district's "Lincoln Middle School Lunch Menu" link
-   (`downloadMenu.php/1571761233982/904073`), which redirects to the current
-   month's menu id;
-2. fetches that month, then walks the API's previous/next-month links (up to
-   12 back and 6 forward);
+1. asks the API for the "Lincoln Middle School Lunch Menu" menu type's
+   currently published month;
+2. fetches that month, then walks its previous/next-month links (up to 12
+   back and 6 forward);
 3. groups each day's items into dishes and writes `site/lincoln-lunch.ics`
    and `site/index.html`.
 

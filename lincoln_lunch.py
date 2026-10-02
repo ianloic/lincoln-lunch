@@ -6,10 +6,12 @@ menu pages are an Angular app, but the data behind them comes from a public
 GraphQL API that returns structured items (product name + category per day),
 so no HTML scraping is needed.
 
-  1. downloadMenu.php/<sid>/<menu type> redirects to the currently published
-     month's menu id.
-  2. The GraphQL `menu(id)` query returns that month's items plus links to the
+  1. The `menuType(id)` query gives the currently published month's menu id.
+  2. The `menu(id)` query returns that month's items plus links to the
      previous and next published months, which we walk in both directions.
+
+Both hosts sit behind Cloudflare, which occasionally 403s GitHub Actions
+runners, so only the API host is used and 403/429 responses are retried.
 
 Usage: python3 lincoln_lunch.py --out site
 """
@@ -28,9 +30,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-SITE_ID = "1571761233982"  # Alameda Unified on schoolnutritionandfitness.com
-MENU_TYPE_ID = "904073"  # "Lincoln Middle School Lunch Menu"
-DOWNLOAD_URL = f"https://www.schoolnutritionandfitness.com/downloadMenu.php/{SITE_ID}/{MENU_TYPE_ID}"
+MENU_TYPE_ID = "5dc0a5f0534a130f1291d943"  # "Lincoln Middle School Lunch Menu"
+# The district's link to the menu, for humans.
+SOURCE_URL = "https://www.schoolnutritionandfitness.com/downloadMenu.php/1571761233982/904073"
 GRAPHQL_URL = "https://api.schoolnutritionandfitness.com/graphql"
 VIEW_URL = "https://www.schoolnutritionandfitness.com/webmenus2/#/view?id={id}&siteCode=6467"
 # The API 403s Python's default User-Agent.
@@ -39,6 +41,12 @@ USER_AGENT = "lincoln-lunch/1.0 (+https://github.com/ianloic/lincoln-lunch)"
 CALENDAR_NAME = "Lincoln Middle School Lunch"
 UID_DOMAIN = "lincoln-lunch.ianloic.github.io"
 FOOTER = "Meals are served with seasonal fruits and vegetables and 1% or non-fat flavored milk. Menu subject to change without notice."
+
+MENU_TYPE_QUERY = """
+query ($id: String!) {
+  menuType(id: $id) { name defaultPublishedMonth { id } }
+}
+"""
 
 MENU_QUERY = """
 query ($id: String!) {
@@ -97,13 +105,18 @@ class Day:
 # Fetching
 
 
-def with_retries(fn, attempts=4, delay=5):
-    """Call fn(), retrying transient network and server errors with backoff."""
+# Cloudflare's bot protection sometimes answers 403 (or 429) to requests from
+# cloud IPs; those are worth retrying like server errors.
+RETRY_STATUS = {403, 408, 429}
+
+
+def with_retries(fn, attempts=5, delay=5):
+    """Call fn(), retrying transient network, server and Cloudflare errors with backoff."""
     for attempt in range(attempts):
         try:
             return fn()
         except (urllib.error.URLError, TimeoutError, ConnectionError) as e:
-            permanent = isinstance(e, urllib.error.HTTPError) and e.code < 500
+            permanent = isinstance(e, urllib.error.HTTPError) and e.code < 500 and e.code not in RETRY_STATUS
             if permanent or attempt == attempts - 1:
                 raise
             print(f"warning: {e}; retrying in {delay}s", file=sys.stderr)
@@ -111,35 +124,8 @@ def with_retries(fn, attempts=4, delay=5):
             delay *= 2
 
 
-class _NoRedirect(urllib.request.HTTPRedirectHandler):
-    def redirect_request(self, *args, **kwargs):
-        return None
-
-
-def current_menu_id():
-    """Follow the menu-type download link to find the current month's menu id."""
-    opener = urllib.request.build_opener(_NoRedirect)
-    req = urllib.request.Request(DOWNLOAD_URL, headers={"User-Agent": USER_AGENT})
-
-    def fetch():
-        try:
-            with opener.open(req, timeout=30) as resp:
-                return resp.headers.get("Location") or resp.geturl()
-        except urllib.error.HTTPError as e:
-            if e.code not in (301, 302, 303, 307, 308):
-                raise
-            return e.headers["Location"]
-
-    location = with_retries(fetch)
-    # e.g. https://.../webmenus2/#/view?id=6ab6b56eac1e5820b27e1516&siteCode=6467
-    m = re.search(r"[?&]id=([0-9a-f]{24})\b", location or "")
-    if not m:
-        raise RuntimeError(f"Could not find menu id in redirect from {DOWNLOAD_URL}: {location!r}")
-    return m.group(1)
-
-
-def fetch_menu(menu_id):
-    body = json.dumps({"query": MENU_QUERY, "variables": {"id": menu_id}}).encode()
+def graphql(query, variables):
+    body = json.dumps({"query": query, "variables": variables}).encode()
     req = urllib.request.Request(
         GRAPHQL_URL,
         data=body,
@@ -152,8 +138,21 @@ def fetch_menu(menu_id):
 
     payload = with_retries(fetch)
     if payload.get("errors"):
-        raise RuntimeError(f"GraphQL errors for menu {menu_id}: {payload['errors']}")
-    return parse_menu(payload["data"]["menu"])
+        raise RuntimeError(f"GraphQL errors for {variables}: {payload['errors']}")
+    return payload["data"]
+
+
+def current_menu_id():
+    """The id of the menu type's currently published month."""
+    menu_type = graphql(MENU_TYPE_QUERY, {"id": MENU_TYPE_ID})["menuType"]
+    current = (menu_type or {}).get("defaultPublishedMonth")
+    if not current:
+        raise RuntimeError(f"No published month for menu type {MENU_TYPE_ID}: {menu_type!r}")
+    return current["id"]
+
+
+def fetch_menu(menu_id):
+    return parse_menu(graphql(MENU_QUERY, {"id": menu_id})["menu"])
 
 
 def parse_menu(m):
@@ -369,7 +368,7 @@ def build_html(days, now, today):
 {"".join(rows)}
 <footer>
 <p>{html.escape(FOOTER)}</p>
-<p>Source: <a href="{html.escape(DOWNLOAD_URL)}">AUSD Food &amp; Nutrition Services</a>. Last updated {updated}.</p>
+<p>Source: <a href="{html.escape(SOURCE_URL)}">AUSD Food &amp; Nutrition Services</a>. Last updated {updated}.</p>
 </footer>
 <script>
   const feed = new URL("lincoln-lunch.ics", location.href);
